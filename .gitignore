@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Local agent/tooling state
+.agents/
+.codex/
+
+# Build output
+dist/
+frontend/dist/
+
+# Environment files
+*.local
+.env*.local
+
+# Python virtual environments
+.venv/
+env/
+backend/.venv/
+backend/env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Logs and temporary TypeScript output
+*.log
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
