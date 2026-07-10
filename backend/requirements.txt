@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+pydantic
+chromadb
+python-dotenv
+passlib[bcrypt]
+bcrypt>=4.0.1,<5
+PyJWT
+Pillow
+python-multipart
+httpx

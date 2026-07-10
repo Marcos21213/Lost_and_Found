@@ -1,7 +1,16 @@
 const TOKEN_KEY = 'lost_found_token';
 const USER_INFO_KEY = 'lost_found_user_info';
 
-export type UserInfo = Record<string, unknown>;
+export type UserRole = 'user' | 'admin';
+
+export type UserInfo = Record<string, unknown> & {
+  id?: string | number;
+  account?: string;
+  username?: string;
+  nickname?: string;
+  role?: UserRole;
+  is_admin?: boolean;
+};
 
 export const setToken = (token: string) => {
   localStorage.setItem(TOKEN_KEY, token);
@@ -40,3 +49,15 @@ export const clearAuthStorage = () => {
   removeToken();
   removeUserInfo();
 };
+
+export const getUserRole = () => {
+  const userInfo = getUserInfo();
+
+  if (userInfo?.role === 'admin' || userInfo?.is_admin) {
+    return 'admin' as const;
+  }
+
+  return 'user' as const;
+};
+
+export const getRoleHomePath = (role = getUserRole()) => (role === 'admin' ? '/admin' : '/home');

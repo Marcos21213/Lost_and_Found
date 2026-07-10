@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button,
@@ -18,6 +18,11 @@ import {
   Tag,
   Toast,
 } from 'antd-mobile';
+import AppTabBar from '@/components/AppTabBar';
+import { fetchPostList, fetchPostStatistics, semanticSearchPosts } from '@/api';
+import type { RawPost } from '@/api';
+import { formatRelativeTime, getPostImage } from '@/utils/display';
+import { getUserRole } from '@/utils/storage';
 
 type PostType = 'lost' | 'found';
 type HomeTab = 'all' | PostType;
@@ -50,116 +55,6 @@ type QueryResult = {
 
 const PAGE_SIZE = 4;
 
-const createImage = (label: string, start: string, end: string) => {
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="240" height="180" viewBox="0 0 240 180">
-      <defs>
-        <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-          <stop stop-color="${start}" offset="0"/>
-          <stop stop-color="${end}" offset="1"/>
-        </linearGradient>
-      </defs>
-      <rect width="240" height="180" rx="28" fill="url(#g)"/>
-      <circle cx="190" cy="34" r="34" fill="rgba(255,255,255,.18)"/>
-      <circle cx="52" cy="146" r="42" fill="rgba(255,255,255,.14)"/>
-      <text x="50%" y="52%" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="42" font-family="Arial" font-weight="800">${label}</text>
-    </svg>
-  `;
-
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-};
-
-const posts: PostItem[] = [
-  {
-    id: '101',
-    title: '蓝色保温杯遗失',
-    description: '杯身有浅色贴纸，最后一次看到是在图书馆三楼靠窗位置。',
-    type: 'lost',
-    category: '生活用品',
-    location: '图书馆三楼',
-    time: '10 分钟前',
-    contact: '李同学 138****5721',
-    image: createImage('杯', '#1677ff', '#55c7ff'),
-  },
-  {
-    id: '102',
-    title: '捡到校园卡一张',
-    description: '姓名尾字为“宁”，已交到一食堂服务台，可凭证件领取。',
-    type: 'found',
-    category: '证件卡片',
-    location: '一食堂门口',
-    time: '28 分钟前',
-    contact: '王同学 156****9042',
-    image: createImage('卡', '#22c55e', '#7ddf9b'),
-  },
-  {
-    id: '103',
-    title: '黑色无线耳机盒',
-    description: '耳机盒表面有一处轻微划痕，可能落在操场看台附近。',
-    type: 'lost',
-    category: '数码设备',
-    location: '东操场',
-    time: '1 小时前',
-    contact: '陈同学 186****3188',
-    image: createImage('耳', '#6366f1', '#38bdf8'),
-  },
-  {
-    id: '104',
-    title: '拾到透明雨伞',
-    description: '雨伞收纳套还在，放在教学楼 A 座大厅保安处。',
-    type: 'found',
-    category: '雨具',
-    location: '教学楼 A 座',
-    time: '2 小时前',
-    contact: '赵同学 151****6620',
-    image: createImage('伞', '#0ea5e9', '#22c55e'),
-  },
-  {
-    id: '105',
-    title: '白色帆布袋寻找',
-    description: '袋内有教材和一本实验记录本，封面写有高数作业。',
-    type: 'lost',
-    category: '书包资料',
-    location: '自习室 B204',
-    time: '今天 09:20',
-    contact: '周同学 139****2468',
-    image: createImage('袋', '#f59e0b', '#fb7185'),
-  },
-  {
-    id: '106',
-    title: '捡到钥匙串',
-    description: '钥匙串上有蓝色小挂件，已暂存在二号门门卫室。',
-    type: 'found',
-    category: '钥匙',
-    location: '二号门',
-    time: '昨天 18:42',
-    contact: '刘同学 177****4801',
-    image: createImage('钥', '#14b8a6', '#1677ff'),
-  },
-  {
-    id: '107',
-    title: '灰色运动外套遗失',
-    description: '外套左袖有学院标识，可能遗落在篮球馆更衣区。',
-    type: 'lost',
-    category: '衣物',
-    location: '篮球馆',
-    time: '昨天 16:05',
-    contact: '孙同学 135****7930',
-    image: createImage('衣', '#64748b', '#38bdf8'),
-  },
-  {
-    id: '108',
-    title: '拾到计算器',
-    description: '型号为科学计算器，显示屏贴膜未撕，已放至学院办公室。',
-    type: 'found',
-    category: '学习用品',
-    location: '理科楼 501',
-    time: '前天 12:12',
-    contact: '吴同学 182****5219',
-    image: createImage('算', '#8b5cf6', '#06b6d4'),
-  },
-];
-
 const typeMeta: Record<PostType, { text: string; color: string }> = {
   lost: {
     text: '寻物',
@@ -171,36 +66,44 @@ const typeMeta: Record<PostType, { text: string; color: string }> = {
   },
 };
 
-const wait = (duration = 520) =>
-  new Promise((resolve) => {
-    window.setTimeout(resolve, duration);
-  });
-
 const queryPostList = async (params: QueryParams): Promise<QueryResult> => {
-  await wait();
+  const keyword = params.keyword.trim();
+  const result =
+    params.searchMode === 'ai' && keyword
+      ? await semanticSearchPosts({
+          page: params.page,
+          pageSize: Math.min(params.pageSize, 15),
+          keyword,
+        })
+      : await fetchPostList({
+          page: params.page,
+          pageSize: params.pageSize,
+          postType: params.tab === 'all' ? undefined : params.tab,
+          keyword,
+        });
 
-  if (params.keyword.trim().toLowerCase() === 'error') {
-    throw new Error('信息流加载失败，请稍后重试');
-  }
-
-  const keyword = params.keyword.trim().toLowerCase();
-  const filtered = posts.filter((post) => {
-    const matchedTab = params.tab === 'all' || post.type === params.tab;
-    const plainText = `${post.title}${post.category}${post.location}`.toLowerCase();
-    const semanticText = `${plainText}${post.description}${post.contact}`.toLowerCase();
-    const matchedKeyword =
-      !keyword || (params.searchMode === 'ai' ? semanticText.includes(keyword) : plainText.includes(keyword));
-
-    return matchedTab && matchedKeyword;
-  });
-  const start = (params.page - 1) * params.pageSize;
-  const list = filtered.slice(start, start + params.pageSize);
+  const rawItems =
+    params.searchMode === 'ai' && params.tab !== 'all'
+      ? result.items.filter((post) => post.post_type === params.tab)
+      : result.items;
 
   return {
-    list,
-    hasMore: start + params.pageSize < filtered.length,
+    list: rawItems.map(mapPostItem),
+    hasMore: params.page * params.pageSize < result.total,
   };
 };
+
+const mapPostItem = (post: RawPost): PostItem => ({
+  id: String(post.id),
+  title: post.goods_name,
+  description: post.description,
+  type: post.post_type,
+  category: post.category,
+  location: post.location,
+  time: formatRelativeTime(post.create_time),
+  contact: post.contact,
+  image: getPostImage(post),
+});
 
 const homeStyles = `
 .home-page {
@@ -292,7 +195,7 @@ const homeStyles = `
 .home-content {
   max-width: 640px;
   margin: 0 auto;
-  padding: 14px 14px calc(88px + env(safe-area-inset-bottom));
+  padding: 14px 14px calc(130px + env(safe-area-inset-bottom));
 }
 
 .home-search-card {
@@ -430,7 +333,7 @@ const homeStyles = `
 .home-publish {
   position: fixed;
   right: 18px;
-  bottom: calc(22px + env(safe-area-inset-bottom));
+  bottom: calc(78px + env(safe-area-inset-bottom));
   z-index: 20;
   height: 46px;
   padding: 0 18px;
@@ -472,16 +375,18 @@ export default function Home() {
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [stats, setStats] = useState({ all: 0, lost: 0, found: 0 });
   const navigate = useNavigate();
+  const isAdmin = getUserRole() === 'admin';
 
-  const stats = useMemo(
-    () => ({
-      all: posts.length,
-      lost: posts.filter((post) => post.type === 'lost').length,
-      found: posts.filter((post) => post.type === 'found').length,
-    }),
-    [],
-  );
+  const loadStats = useCallback(async () => {
+    try {
+      const result = await fetchPostStatistics();
+      setStats(result);
+    } catch {
+      setStats({ all: 0, lost: 0, found: 0 });
+    }
+  }, []);
 
   const loadPosts = useCallback(
     async (targetPage: number, append: boolean) => {
@@ -518,13 +423,14 @@ export default function Home() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      void loadStats();
       void loadPosts(1, false);
     }, 0);
 
     return () => {
       window.clearTimeout(timer);
     };
-  }, [loadPosts]);
+  }, [loadPosts, loadStats]);
 
   const handleSearch = (value: string) => {
     setKeyword(value.trim());
@@ -534,7 +440,7 @@ export default function Home() {
   };
 
   const handleRefresh = async () => {
-    await loadPosts(1, false);
+    await Promise.all([loadStats(), loadPosts(1, false)]);
     Toast.show({
       icon: 'success',
       content: '已刷新',
@@ -658,9 +564,12 @@ export default function Home() {
         </PullToRefresh>
       </section>
 
-      <Button className="home-publish" color="primary" onClick={() => navigate('/publish')}>
-        发布帖子
-      </Button>
+      {!isAdmin && (
+        <Button className="home-publish" color="primary" onClick={() => navigate('/publish')}>
+          发布帖子
+        </Button>
+      )}
+      <AppTabBar activeKey="home" />
     </main>
   );
 }

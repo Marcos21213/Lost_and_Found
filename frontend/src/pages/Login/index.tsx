@@ -1,55 +1,36 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Form, Input, Tabs, Toast } from 'antd-mobile';
-import request from '@/utils/request';
-import { setToken, setUserInfo } from '@/utils/storage';
+import { login as loginApi, register as registerApi } from '@/api';
+import { normalizeUserInfo } from '@/utils/display';
+import { getRoleHomePath, setToken, setUserInfo } from '@/utils/storage';
 
 type AuthMode = 'login' | 'register';
 
 type AuthFormValues = {
-  phone: string;
+  account: string;
   password: string;
   confirmPassword?: string;
   nickname?: string;
 };
 
-type AuthResponse = {
-  token?: string;
-  user?: Record<string, unknown>;
-  data?: {
-    token?: string;
-    user?: Record<string, unknown>;
-  };
-};
+const ACCOUNT_MIN_LENGTH = 4;
+const ACCOUNT_MAX_LENGTH = 20;
+const accountPattern = /^[A-Za-z0-9_]+$/;
 
-const DEMO_MODE = true;
-const phonePattern = /^1[3-9]\d{9}$/;
+const submitAuth = async (mode: AuthMode, values: AuthFormValues) => {
+  const account = values.account.trim();
 
-const wait = (duration = 650) =>
-  new Promise((resolve) => {
-    window.setTimeout(resolve, duration);
-  });
-
-const submitAuth = async (mode: AuthMode, values: AuthFormValues): Promise<AuthResponse> => {
-  if (DEMO_MODE) {
-    await wait();
-
-    if (values.phone.endsWith('0000')) {
-      throw new Error('当前账号状态异常，请换一个手机号重试');
-    }
-
-    return {
-      token: `demo-token-${values.phone}-${Date.now()}`,
-      user: {
-        id: values.phone,
-        phone: values.phone,
-        nickname: values.nickname || '校园用户',
-      },
-    };
+  if (mode === 'register') {
+    await registerApi({
+      account,
+      password: values.password,
+      nickname: values.nickname,
+    });
+    return null;
   }
 
-  const url = mode === 'login' ? '/auth/login' : '/auth/register';
-  return (await request.post(url, values)) as unknown as AuthResponse;
+  return loginApi(account, values.password);
 };
 
 const loginStyles = `
@@ -263,27 +244,25 @@ export default function Login() {
         return;
       }
 
-      const authToken = response.token || response.data?.token;
+      const authToken = response?.token;
+      const responseUser = response?.user;
 
       if (!authToken) {
         throw new Error('登录成功但未返回 token，请检查接口返回结构');
       }
 
+      const userInfo = normalizeUserInfo(responseUser, values.account.trim());
+
       setToken(authToken);
-      setUserInfo(
-        response.user ||
-          response.data?.user || {
-            phone: values.phone,
-          },
-      );
+      setUserInfo(userInfo);
 
       Toast.show({
         icon: 'success',
-        content: '登录成功',
+        content: userInfo.is_admin ? '管理员登录成功' : '登录成功',
       });
 
       window.setTimeout(() => {
-        navigate('/home', { replace: true });
+        navigate(getRoleHomePath(userInfo.role), { replace: true });
       }, 420);
     } catch (error) {
       Toast.show({
@@ -302,7 +281,7 @@ export default function Login() {
         <div className="login-brand">
           <div className="login-logo">拾</div>
           <h1 className="login-title">校园失物招领</h1>
-          <p className="login-subtitle">让每一次遗失，都有被找回的路径</p>
+          <p className="login-subtitle">使用账号登录，系统将自动识别身份</p>
         </div>
 
         <Tabs className="login-tabs" activeKey={activeMode} onChange={handleModeChange} stretch>
@@ -327,24 +306,41 @@ export default function Login() {
             <Form.Item
               name="nickname"
               label="昵称"
-              rules={[{ required: true, message: '请输入昵称' }]}
+              rules={[
+                { required: true, message: '请输入昵称' },
+                { min: 2, message: '昵称至少 2 位' },
+                { max: 16, message: '昵称最多 16 位' },
+              ]}
             >
-              <Input clearable placeholder="请输入昵称" maxLength={16} />
+              <Input clearable maxLength={16} placeholder="请输入昵称" />
             </Form.Item>
           )}
 
           <Form.Item
-            name="phone"
-            label="手机号"
+            name="account"
+            label="账号"
             rules={[
-              { required: true, message: '请输入手机号' },
+              { required: true, message: '请输入账号' },
               {
-                pattern: phonePattern,
-                message: '请输入正确的 11 位手机号',
+                min: ACCOUNT_MIN_LENGTH,
+                message: `账号至少 ${ACCOUNT_MIN_LENGTH} 位`,
+              },
+              {
+                max: ACCOUNT_MAX_LENGTH,
+                message: `账号最多 ${ACCOUNT_MAX_LENGTH} 位`,
+              },
+              {
+                pattern: accountPattern,
+                message: '账号仅支持字母、数字和下划线',
               },
             ]}
           >
-            <Input clearable inputMode="tel" maxLength={11} placeholder="请输入手机号" />
+            <Input
+              clearable
+              maxLength={ACCOUNT_MAX_LENGTH}
+              autoComplete="username"
+              placeholder={`${ACCOUNT_MIN_LENGTH}-${ACCOUNT_MAX_LENGTH} 位字母/数字/下划线`}
+            />
           </Form.Item>
 
           <Form.Item
@@ -353,9 +349,16 @@ export default function Login() {
             rules={[
               { required: true, message: '请输入密码' },
               { min: 6, message: '密码至少 6 位' },
+              { max: 32, message: '密码最多 32 位' },
             ]}
           >
-            <Input clearable type="password" placeholder="请输入密码" autoComplete="current-password" />
+            <Input
+              clearable
+              type="password"
+              maxLength={32}
+              placeholder="请输入密码"
+              autoComplete={activeMode === 'login' ? 'current-password' : 'new-password'}
+            />
           </Form.Item>
 
           {activeMode === 'register' && (
@@ -375,12 +378,12 @@ export default function Login() {
                 },
               ]}
             >
-              <Input clearable type="password" placeholder="请再次输入密码" />
+              <Input clearable type="password" maxLength={32} placeholder="请再次输入密码" autoComplete="new-password" />
             </Form.Item>
           )}
         </Form>
 
-        <p className="login-tip">登录即表示你同意以校园互助为目的发布与查看失物招领信息</p>
+        <p className="login-tip">注册账号默认为普通用户；管理员身份由数据库 is_admin 字段决定</p>
       </section>
     </main>
   );

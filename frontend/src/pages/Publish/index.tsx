@@ -12,7 +12,8 @@ import {
   Toast,
 } from 'antd-mobile';
 import type { ImageUploadItem } from 'antd-mobile';
-import request from '@/utils/request';
+import AppTabBar from '@/components/AppTabBar';
+import { createPost } from '@/api';
 
 type PublishType = 'lost' | 'found';
 
@@ -20,6 +21,7 @@ type PublishFormValues = {
   title: string;
   category: string[];
   location: string;
+  happenTime: string;
   contact: string;
   description: string;
 };
@@ -29,12 +31,16 @@ type PublishPayload = {
   title: string;
   category: string;
   location: string;
+  happenTime: string;
   contact: string;
   description: string;
-  images: ImageUploadItem[];
+  images: LocalImageUploadItem[];
 };
 
-const DEMO_MODE = true;
+type LocalImageUploadItem = ImageUploadItem & {
+  file?: File;
+};
+
 const MAX_IMAGE_SIZE = 2 * 1024 * 1024;
 
 const categoryOptions = [
@@ -51,6 +57,15 @@ const wait = (duration = 700) =>
     window.setTimeout(resolve, duration);
   });
 
+const getDefaultHappenTime = () => {
+  const now = new Date();
+  const month = `${now.getMonth() + 1}`.padStart(2, '0');
+  const date = `${now.getDate()}`.padStart(2, '0');
+  const hours = `${now.getHours()}`.padStart(2, '0');
+  const minutes = `${now.getMinutes()}`.padStart(2, '0');
+  return `${month}-${date} ${hours}:${minutes}`;
+};
+
 const polishDescription = async (description: string) => {
   await wait(820);
 
@@ -62,19 +77,16 @@ const polishDescription = async (description: string) => {
 };
 
 const submitPost = async (payload: PublishPayload) => {
-  if (DEMO_MODE) {
-    await wait(900);
-
-    if (payload.title.includes('失败')) {
-      throw new Error('发布失败，请检查网络后重试');
-    }
-
-    return {
-      id: String(Date.now()),
-    };
-  }
-
-  return request.post('/posts', payload);
+  return createPost({
+    postType: payload.type,
+    goodsName: payload.title,
+    category: payload.category,
+    location: payload.location,
+    happenTime: payload.happenTime,
+    contact: payload.contact,
+    description: payload.description,
+    files: payload.images.map((item) => item.file).filter((file): file is File => Boolean(file)),
+  });
 };
 
 const publishStyles = `
@@ -136,7 +148,7 @@ const publishStyles = `
 .publish-content {
   max-width: 640px;
   margin: 0 auto;
-  padding: 0 14px calc(28px + env(safe-area-inset-bottom));
+  padding: 0 14px calc(92px + env(safe-area-inset-bottom));
 }
 
 .publish-section {
@@ -310,7 +322,7 @@ const publishStyles = `
 
 export default function Publish() {
   const [publishType, setPublishType] = useState<PublishType>('lost');
-  const [images, setImages] = useState<ImageUploadItem[]>([]);
+  const [images, setImages] = useState<LocalImageUploadItem[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const lastSubmitAtRef = useRef(0);
@@ -341,13 +353,14 @@ export default function Publish() {
     return file;
   };
 
-  const uploadImage = async (file: File): Promise<ImageUploadItem> => {
+  const uploadImage = async (file: File): Promise<LocalImageUploadItem> => {
     await wait(240);
     const url = URL.createObjectURL(file);
 
     return {
       key: `${file.name}-${Date.now()}`,
       url,
+      file,
     };
   };
 
@@ -402,16 +415,17 @@ export default function Publish() {
         location: values.location,
         contact: values.contact,
         description: values.description,
+        happenTime: values.happenTime,
         images,
       });
 
       Toast.show({
         icon: 'success',
-        content: '发布成功',
+        content: '发布成功，等待管理员审核',
       });
 
       window.setTimeout(() => {
-        navigate('/home', { replace: true });
+        navigate('/mine', { replace: true });
       }, 520);
     } catch (error) {
       Toast.show({
@@ -445,6 +459,7 @@ export default function Publish() {
           requiredMarkStyle="asterisk"
           initialValues={{
             category: ['证件卡片'],
+            happenTime: getDefaultHappenTime(),
           }}
           onFinish={handleSubmit}
           footer={
@@ -477,6 +492,14 @@ export default function Publish() {
               rules={[{ required: true, message: '请输入相关地点' }]}
             >
               <Input clearable maxLength={32} placeholder="例如：图书馆三楼靠窗位置" />
+            </Form.Item>
+
+            <Form.Item
+              name="happenTime"
+              label={publishType === 'lost' ? '遗失时间' : '拾到时间'}
+              rules={[{ required: true, message: '请输入发生时间' }]}
+            >
+              <Input clearable maxLength={32} placeholder="例如：今天 10:30" />
             </Form.Item>
 
             <Form.Item
@@ -533,7 +556,7 @@ export default function Publish() {
               imageFit="cover"
               beforeUpload={beforeUpload}
               upload={uploadImage}
-              onChange={setImages}
+              onChange={(items) => setImages(items as LocalImageUploadItem[])}
               onCountExceed={() => {
                 Toast.show({
                   icon: 'fail',
@@ -557,6 +580,7 @@ export default function Publish() {
 
         </Form>
       </section>
+      <AppTabBar activeKey="publish" />
     </main>
   );
 }

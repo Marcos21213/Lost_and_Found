@@ -3,8 +3,14 @@ import type { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { Toast } from 'antd-mobile';
 import { clearAuthStorage, getToken } from '@/utils/storage';
 
+type ErrorResponseBody = {
+  message?: string;
+  msg?: string;
+  detail?: string | { message?: string; reason?: string } | Array<{ msg?: string; message?: string }>;
+};
+
 const request = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 15000,
 });
 
@@ -20,11 +26,19 @@ request.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 request.interceptors.response.use(
   (response) => response.data,
-  (error: AxiosError<{ message?: string; msg?: string }>) => {
+  (error: AxiosError<ErrorResponseBody>) => {
     const status = error.response?.status;
+    const detail = error.response?.data?.detail;
+    const detailMessage =
+      typeof detail === 'string'
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((item) => item.message || item.msg).filter(Boolean).join('；')
+          : detail?.message || detail?.reason;
     const message =
       error.response?.data?.message ||
       error.response?.data?.msg ||
+      detailMessage ||
       error.message ||
       '请求失败，请稍后重试';
 

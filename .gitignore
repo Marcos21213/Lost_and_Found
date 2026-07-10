@@ -24,6 +24,9 @@ backend/env/
 __pycache__/
 *.py[cod]
 
+# Backend runtime data
+backend/data/
+
 # Logs and temporary TypeScript output
 *.log
 *.tsbuildinfo

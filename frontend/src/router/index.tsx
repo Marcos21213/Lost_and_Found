@@ -3,6 +3,8 @@ import { lazy, Suspense } from 'react';
 import type { ReactNode } from 'react';
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import type { RouteObject } from 'react-router-dom';
+import { getRoleHomePath, getToken, getUserRole } from '@/utils/storage';
+import type { UserRole } from '@/utils/storage';
 
 const Login = lazy(() => import('@/pages/Login'));
 const Home = lazy(() => import('@/pages/Home'));
@@ -15,10 +17,28 @@ const lazyElement = (element: ReactNode) => (
   <Suspense fallback={<div className="page-container" />}>{element}</Suspense>
 );
 
+const AuthRoute = ({ children, requiredRole }: { children: ReactNode; requiredRole?: UserRole }) => {
+  if (!getToken()) {
+    return <Navigate to="/login" replace />;
+  }
+
+  const currentRole = getUserRole();
+
+  if (requiredRole && currentRole !== requiredRole) {
+    return <Navigate to={getRoleHomePath(currentRole)} replace />;
+  }
+
+  return <>{children}</>;
+};
+
+const protectedElement = (element: ReactNode, requiredRole?: UserRole) => (
+  <AuthRoute requiredRole={requiredRole}>{lazyElement(element)}</AuthRoute>
+);
+
 export const routes: RouteObject[] = [
   {
     path: '/',
-    element: <Navigate to="/home" replace />,
+    element: <Navigate to="/login" replace />,
   },
   {
     path: '/login',
@@ -26,27 +46,27 @@ export const routes: RouteObject[] = [
   },
   {
     path: '/home',
-    element: lazyElement(<Home />),
+    element: protectedElement(<Home />),
   },
   {
     path: '/publish',
-    element: lazyElement(<Publish />),
+    element: protectedElement(<Publish />, 'user'),
   },
   {
     path: '/detail/:id',
-    element: lazyElement(<Detail />),
+    element: protectedElement(<Detail />),
   },
   {
     path: '/mine',
-    element: lazyElement(<Mine />),
+    element: protectedElement(<Mine />),
   },
   {
     path: '/admin',
-    element: lazyElement(<Admin />),
+    element: protectedElement(<Admin />, 'admin'),
   },
   {
     path: '*',
-    element: <Navigate to="/home" replace />,
+    element: <Navigate to="/login" replace />,
   },
 ];
 

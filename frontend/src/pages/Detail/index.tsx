@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Avatar,
@@ -6,6 +6,7 @@ import {
   Card,
   Dialog,
   Divider,
+  Empty,
   Image,
   NavBar,
   Skeleton,
@@ -15,19 +16,31 @@ import {
   TextArea,
   Toast,
 } from 'antd-mobile';
-import request from '@/utils/request';
+import {
+  cancelCollectPost,
+  collectPost,
+  createComment,
+  deleteComment,
+  fetchPostComments,
+  fetchPostDetail,
+  offlinePost,
+  resolveAssetUrl,
+} from '@/api';
+import type { PostStatus, PostType, RawComment, RawPost } from '@/api';
+import { createPlaceholderImage, formatRelativeTime, getAvatarUrl, statusMeta } from '@/utils/display';
 import { getUserInfo } from '@/utils/storage';
-
-type PostType = 'lost' | 'found';
 
 type DetailPost = {
   id: string;
   title: string;
   type: PostType;
   category: string;
+  rawStatus: PostStatus;
   status: string;
+  statusColor: string;
   location: string;
-  time: string;
+  happenTime: string;
+  createTime: string;
   contact: string;
   authorId: string;
   authorName: string;
@@ -47,118 +60,58 @@ type CommentItem = {
 };
 
 type CurrentUser = {
-  id?: string;
-  phone?: string;
+  id?: string | number;
+  username?: string;
   nickname?: string;
-};
-
-const DEMO_MODE = true;
-
-const wait = (duration = 520) =>
-  new Promise((resolve) => {
-    window.setTimeout(resolve, duration);
-  });
-
-const createImage = (label: string, start: string, end: string) => {
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="720" height="520" viewBox="0 0 720 520">
-      <defs>
-        <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-          <stop stop-color="${start}" offset="0"/>
-          <stop stop-color="${end}" offset="1"/>
-        </linearGradient>
-      </defs>
-      <rect width="720" height="520" rx="46" fill="url(#g)"/>
-      <circle cx="604" cy="88" r="96" fill="rgba(255,255,255,.16)"/>
-      <circle cx="126" cy="426" r="124" fill="rgba(255,255,255,.14)"/>
-      <text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="132" font-family="Arial" font-weight="800">${label}</text>
-    </svg>
-  `;
-
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-};
-
-const createAvatar = (name: string, color = '#1677ff') => {
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120">
-      <rect width="120" height="120" rx="36" fill="${color}"/>
-      <text x="50%" y="54%" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="46" font-family="Arial" font-weight="800">${name.slice(0, 1)}</text>
-    </svg>
-  `;
-
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 };
 
 const getCurrentUser = (): Required<Pick<CurrentUser, 'id' | 'nickname'>> => {
   const user = getUserInfo<CurrentUser>();
-  const id = String(user?.id || user?.phone || 'u1001');
+  const id = String(user?.id || '');
+  const nickname = String(user?.nickname || user?.username || '我');
+
+  return { id, nickname };
+};
+
+const mapDetailPost = (post: RawPost): DetailPost => {
+  const authorName = post.author?.username || '校园用户';
+  const meta = statusMeta(post.status);
+  const images = post.img_list?.map(resolveAssetUrl).filter(Boolean);
 
   return {
-    id,
-    nickname: user?.nickname || '我',
+    id: String(post.id),
+    title: post.goods_name,
+    type: post.post_type,
+    category: post.category,
+    rawStatus: post.status,
+    status: meta.text,
+    statusColor: meta.color,
+    location: post.location,
+    happenTime: post.happen_time,
+    createTime: formatRelativeTime(post.create_time),
+    contact: post.contact,
+    authorId: String(post.user_id),
+    authorName,
+    authorAvatar: getAvatarUrl(authorName, post.author?.avatar),
+    content: post.description
+      .split(/\n+/)
+      .map((item) => item.trim())
+      .filter(Boolean),
+    images: images.length > 0 ? images : [createPlaceholderImage(post.goods_name || post.category)],
+    collected: Boolean(post.collected),
   };
 };
 
-const createDemoPost = (id: string, currentUserId: string): DetailPost => ({
-  id,
-  title: '蓝色保温杯遗失',
-  type: 'lost',
-  category: '生活用品',
-  status: '寻找中',
-  location: '图书馆三楼靠窗自习区',
-  time: '今天 10:20',
-  contact: '13857216888',
-  authorId: currentUserId,
-  authorName: '李同学',
-  authorAvatar: createAvatar('李', '#1677ff'),
-  content: [
-    '杯身是雾面蓝色，侧面贴有一枚浅色贴纸，杯盖上有轻微划痕。',
-    '最后一次看到是在图书馆三楼靠窗位置，大约上午十点二十分离开后发现遗失。',
-    '如果有同学看到或拾到，可以通过联系方式联系我，非常感谢。',
-  ],
-  images: [createImage('杯', '#1677ff', '#55c7ff'), createImage('找', '#22c55e', '#38bdf8')],
-  collected: false,
-});
+const mapComment = (comment: RawComment): CommentItem => {
+  const nickname = comment.user?.username || '校园用户';
 
-const createDemoComments = (currentUserId: string): CommentItem[] => [
-  {
-    id: 'c101',
-    userId: 'u2001',
-    nickname: '王同学',
-    avatar: createAvatar('王', '#22c55e'),
-    content: '我中午路过三楼的时候好像看见过，靠近打印机那边可以再找一下。',
-    time: '12 分钟前',
-  },
-  {
-    id: 'c102',
-    userId: currentUserId,
-    nickname: '我',
-    avatar: createAvatar('我', '#1677ff'),
-    content: '谢谢，我已经去打印区看过了，还没有找到。',
-    time: '刚刚',
-  },
-  {
-    id: 'c103',
-    userId: 'u2002',
-    nickname: '赵同学',
-    avatar: createAvatar('赵', '#8b5cf6'),
-    content: '可以问一下前台老师，今天有几件物品被送过去。',
-    time: '5 分钟前',
-  },
-];
-
-const fetchDetail = async (postId: string, currentUserId: string) => {
-  if (DEMO_MODE) {
-    await wait();
-    return {
-      post: createDemoPost(postId, currentUserId),
-      comments: createDemoComments(currentUserId),
-    };
-  }
-
-  return (await request.get(`/posts/${postId}`)) as unknown as {
-    post: DetailPost;
-    comments: CommentItem[];
+  return {
+    id: String(comment.id),
+    userId: String(comment.user_id),
+    nickname,
+    avatar: getAvatarUrl(nickname, comment.user?.avatar),
+    content: comment.content,
+    time: formatRelativeTime(comment.create_time),
   };
 };
 
@@ -167,7 +120,6 @@ const detailStyles = `
   min-height: 100vh;
   overflow-x: hidden;
   background: #f5f8fd;
-  animation: detailEnter 360ms ease both;
 }
 
 .detail-header {
@@ -228,7 +180,6 @@ const detailStyles = `
   height: 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.58);
-  transition: all 180ms ease;
 }
 
 .detail-indicator-dot-active {
@@ -388,17 +339,12 @@ const detailStyles = `
   background: #f2f6fb;
   border: 0;
   font-weight: 800;
-  transition: transform 160ms ease, color 160ms ease, background 160ms ease;
 }
 
 .detail-favorite-active {
   color: #fff;
   background: linear-gradient(135deg, #ff7a45 0%, #ff4d4f 100%);
   box-shadow: 0 10px 18px rgba(255, 77, 79, 0.24);
-}
-
-.detail-favorite:active {
-  transform: scale(0.94);
 }
 
 .detail-comments {
@@ -482,12 +428,6 @@ const detailStyles = `
   border: 1px solid #e7eef8;
 }
 
-.detail-input:focus-within {
-  border-color: rgba(22, 119, 255, 0.5);
-  box-shadow: 0 0 0 4px rgba(22, 119, 255, 0.08);
-  background: #fff;
-}
-
 .detail-send {
   height: 44px;
   align-self: end;
@@ -503,24 +443,12 @@ const detailStyles = `
   border-radius: 20px;
   background: #fff;
 }
-
-@keyframes detailEnter {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 `;
 
 export default function Detail() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const currentUser = useMemo(() => getCurrentUser(), []);
+  const currentUser = useState(() => getCurrentUser())[0];
   const [post, setPost] = useState<DetailPost | null>(null);
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -528,25 +456,29 @@ export default function Detail() {
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
   const actionLockedRef = useRef(false);
-  const commentIdRef = useRef(1000);
 
   const isOwner = Boolean(post && post.authorId === currentUser.id);
+  const canComment = post?.rawStatus === 'open';
 
   useEffect(() => {
     let mounted = true;
 
     const loadDetail = async () => {
+      if (!id) {
+        return;
+      }
+
       setLoading(true);
 
       try {
-        const result = await fetchDetail(id || '101', currentUser.id);
+        const [postResult, commentResult] = await Promise.all([fetchPostDetail(id), fetchPostComments(id)]);
 
         if (!mounted) {
           return;
         }
 
-        setPost(result.post);
-        setComments(result.comments);
+        setPost(mapDetailPost(postResult));
+        setComments(commentResult.items.map(mapComment));
       } catch (error) {
         await Dialog.alert({
           title: '加载失败',
@@ -565,7 +497,7 @@ export default function Detail() {
     return () => {
       mounted = false;
     };
-  }, [currentUser.id, id]);
+  }, [id]);
 
   const handleCopy = async () => {
     if (!post) {
@@ -574,14 +506,9 @@ export default function Detail() {
 
     try {
       await navigator.clipboard.writeText(post.contact);
-      Toast.show({
-        icon: 'success',
-        content: '联系方式已复制',
-      });
+      Toast.show({ icon: 'success', content: '联系方式已复制' });
     } catch {
-      Toast.show({
-        content: `联系方式：${post.contact}`,
-      });
+      Toast.show({ content: `联系方式：${post.contact}` });
     }
   };
 
@@ -593,25 +520,16 @@ export default function Detail() {
     setFavoriteLoading(true);
 
     try {
-      if (!DEMO_MODE) {
-        await request.post(`/posts/${post.id}/favorite`);
+      if (post.collected) {
+        await cancelCollectPost(post.id);
       } else {
-        await wait(260);
+        await collectPost(post.id);
       }
 
-      setPost({
-        ...post,
-        collected: !post.collected,
-      });
-      Toast.show({
-        icon: 'success',
-        content: post.collected ? '已取消收藏' : '已收藏',
-      });
+      setPost({ ...post, collected: !post.collected });
+      Toast.show({ icon: 'success', content: post.collected ? '已取消收藏' : '已收藏' });
     } catch (error) {
-      Toast.show({
-        icon: 'fail',
-        content: error instanceof Error ? error.message : '收藏状态更新失败',
-      });
+      Toast.show({ icon: 'fail', content: error instanceof Error ? error.message : '收藏状态更新失败' });
     } finally {
       setFavoriteLoading(false);
     }
@@ -621,17 +539,17 @@ export default function Detail() {
     const content = message.trim();
 
     if (!content) {
-      Toast.show({
-        icon: 'fail',
-        content: '请输入留言内容',
-      });
+      Toast.show({ icon: 'fail', content: '请输入留言内容' });
+      return;
+    }
+
+    if (!post || !canComment) {
+      Toast.show({ content: '当前帖子不可留言' });
       return;
     }
 
     if (actionLockedRef.current) {
-      Toast.show({
-        content: '操作太快了，请稍后再试',
-      });
+      Toast.show({ content: '操作太快了，请稍后再试' });
       return;
     }
 
@@ -642,33 +560,13 @@ export default function Detail() {
     setSending(true);
 
     try {
-      if (!DEMO_MODE && post) {
-        await request.post(`/posts/${post.id}/comments`, { content });
-      } else {
-        await wait(360);
-      }
+      const result = await createComment(post.id, content);
 
-      setComments((current) => [
-        ...current,
-        {
-          id: `c-${commentIdRef.current++}`,
-          userId: currentUser.id,
-          nickname: currentUser.nickname,
-          avatar: createAvatar(currentUser.nickname, '#1677ff'),
-          content,
-          time: '刚刚',
-        },
-      ]);
+      setComments((current) => [...current, mapComment(result)]);
       setMessage('');
-      Toast.show({
-        icon: 'success',
-        content: '留言已发布',
-      });
+      Toast.show({ icon: 'success', content: '留言已发布' });
     } catch (error) {
-      Toast.show({
-        icon: 'fail',
-        content: error instanceof Error ? error.message : '留言发布失败',
-      });
+      Toast.show({ icon: 'fail', content: error instanceof Error ? error.message : '留言发布失败' });
     } finally {
       setSending(false);
     }
@@ -687,22 +585,11 @@ export default function Detail() {
     }
 
     try {
-      if (!DEMO_MODE && post) {
-        await request.delete(`/posts/${post.id}/comments/${comment.id}`);
-      } else {
-        await wait(240);
-      }
-
+      await deleteComment(comment.id);
       setComments((current) => current.filter((item) => item.id !== comment.id));
-      Toast.show({
-        icon: 'success',
-        content: '留言已删除',
-      });
+      Toast.show({ icon: 'success', content: '留言已删除' });
     } catch (error) {
-      Toast.show({
-        icon: 'fail',
-        content: error instanceof Error ? error.message : '删除失败，请稍后重试',
-      });
+      Toast.show({ icon: 'fail', content: error instanceof Error ? error.message : '删除失败，请稍后重试' });
     }
   };
 
@@ -723,25 +610,11 @@ export default function Detail() {
     }
 
     try {
-      if (!DEMO_MODE) {
-        await request.patch(`/posts/${post.id}/status`, { status: 'offline' });
-      } else {
-        await wait(380);
-      }
-
-      setPost({
-        ...post,
-        status: '已下架',
-      });
-      Toast.show({
-        icon: 'success',
-        content: '帖子已下架',
-      });
+      const updated = await offlinePost(post.id);
+      setPost(mapDetailPost({ ...updated, collected: post.collected, author: { id: post.authorId, username: post.authorName } }));
+      Toast.show({ icon: 'success', content: '帖子已下架' });
     } catch (error) {
-      Toast.show({
-        icon: 'fail',
-        content: error instanceof Error ? error.message : '下架失败，请稍后重试',
-      });
+      Toast.show({ icon: 'fail', content: error instanceof Error ? error.message : '下架失败，请稍后重试' });
     }
   };
 
@@ -766,15 +639,13 @@ export default function Detail() {
             <div className="detail-swiper-card">
               <Swiper
                 className="detail-swiper"
-                autoplay
-                loop
+                autoplay={post.images.length > 1}
+                loop={post.images.length > 1}
                 indicator={(total, current) => (
                   <div className="detail-indicator">
                     {Array.from({ length: total }).map((_, index) => (
                       <span
-                        className={`detail-indicator-dot ${
-                          current === index ? 'detail-indicator-dot-active' : ''
-                        }`}
+                        className={`detail-indicator-dot ${current === index ? 'detail-indicator-dot-active' : ''}`}
                         key={index}
                       />
                     ))}
@@ -792,11 +663,7 @@ export default function Detail() {
             <Card className="detail-card">
               <div className="detail-title-row">
                 <h1 className="detail-title">{post.title}</h1>
-                <Tag
-                  className="detail-type"
-                  fill="solid"
-                  color={post.type === 'lost' ? '#ff6b3d' : '#16a34a'}
-                >
+                <Tag className="detail-type" fill="solid" color={post.type === 'lost' ? '#ff6b3d' : '#16a34a'}>
                   {post.type === 'lost' ? '寻物' : '招领'}
                 </Tag>
               </div>
@@ -808,15 +675,15 @@ export default function Detail() {
                 </div>
                 <div className="detail-meta">
                   <span>状态</span>
-                  <strong>{post.status}</strong>
+                  <strong style={{ color: post.statusColor }}>{post.status}</strong>
                 </div>
                 <div className="detail-meta">
                   <span>地点</span>
                   <strong>{post.location}</strong>
                 </div>
                 <div className="detail-meta">
-                  <span>时间</span>
-                  <strong>{post.time}</strong>
+                  <span>发生时间</span>
+                  <strong>{post.happenTime}</strong>
                 </div>
               </div>
 
@@ -824,7 +691,7 @@ export default function Detail() {
                 <Avatar src={post.authorAvatar} style={{ '--size': '42px', '--border-radius': '14px' }} />
                 <div>
                   <p className="detail-author-name">{post.authorName}</p>
-                  <p className="detail-author-time">发布于 {post.time}</p>
+                  <p className="detail-author-time">发布于 {post.createTime}</p>
                 </div>
               </div>
 
@@ -832,26 +699,16 @@ export default function Detail() {
                 <Button
                   className={`detail-favorite ${post.collected ? 'detail-favorite-active' : ''}`}
                   loading={favoriteLoading}
+                  disabled={post.rawStatus !== 'open'}
                   onClick={handleFavorite}
                 >
                   <span>{post.collected ? '★' : '☆'}</span>
                   <span>{post.collected ? '已收藏' : '收藏'}</span>
                 </Button>
                 {isOwner && (
-                  <>
-                    <Button
-                      className="detail-action-button"
-                      fill="outline"
-                      onClick={() => {
-                        Toast.show('编辑功能待接入');
-                      }}
-                    >
-                      编辑
-                    </Button>
-                    <Button className="detail-action-button detail-risk-button" fill="outline" onClick={handleOffline}>
-                      下架
-                    </Button>
-                  </>
+                  <Button className="detail-action-button detail-risk-button" fill="outline" onClick={handleOffline}>
+                    下架
+                  </Button>
                 )}
               </Space>
             </Card>
@@ -877,33 +734,37 @@ export default function Detail() {
 
             <Card className="detail-card">
               <h2 className="detail-section-title">留言区</h2>
-              <div className="detail-comments">
-                {comments.map((comment) => {
-                  const isMine = comment.userId === currentUser.id;
+              {comments.length === 0 ? (
+                <Empty description="暂无留言" />
+              ) : (
+                <div className="detail-comments">
+                  {comments.map((comment) => {
+                    const isMine = comment.userId === currentUser.id;
 
-                  return (
-                    <div className={`detail-comment ${isMine ? 'detail-comment-mine' : ''}`} key={comment.id}>
-                      <Avatar src={comment.avatar} style={{ '--size': '38px', '--border-radius': '13px' }} />
-                      <div className="detail-comment-bubble">
-                        <div className="detail-comment-head">
-                          <span className="detail-comment-name">{comment.nickname}</span>
-                          <span className="detail-comment-time">{comment.time}</span>
+                    return (
+                      <div className={`detail-comment ${isMine ? 'detail-comment-mine' : ''}`} key={comment.id}>
+                        <Avatar src={comment.avatar} style={{ '--size': '38px', '--border-radius': '13px' }} />
+                        <div className="detail-comment-bubble">
+                          <div className="detail-comment-head">
+                            <span className="detail-comment-name">{comment.nickname}</span>
+                            <span className="detail-comment-time">{comment.time}</span>
+                          </div>
+                          <p className="detail-comment-text">{comment.content}</p>
+                          {isMine && (
+                            <Button
+                              className="detail-delete-comment"
+                              fill="none"
+                              onClick={() => handleDeleteComment(comment)}
+                            >
+                              删除
+                            </Button>
+                          )}
                         </div>
-                        <p className="detail-comment-text">{comment.content}</p>
-                        {isMine && (
-                          <Button
-                            className="detail-delete-comment"
-                            fill="none"
-                            onClick={() => handleDeleteComment(comment)}
-                          >
-                            删除
-                          </Button>
-                        )}
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </Card>
           </>
         )}
@@ -917,10 +778,11 @@ export default function Detail() {
               onChange={setMessage}
               rows={1}
               maxLength={120}
-              placeholder="写下你的线索或补充信息"
+              disabled={!canComment}
+              placeholder={canComment ? '写下你的线索或补充信息' : '当前帖子不可留言'}
             />
           </div>
-          <Button className="detail-send" color="primary" loading={sending} onClick={handleSend}>
+          <Button className="detail-send" color="primary" loading={sending} disabled={!canComment} onClick={handleSend}>
             发布
           </Button>
         </div>

@@ -1,31 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Button,
-  Card,
-  Dialog,
-  Empty,
-  InfiniteScroll,
-  NavBar,
-  Skeleton,
-  Space,
-  Tag,
-  Toast,
-} from 'antd-mobile';
-import request from '@/utils/request';
-
-type ReviewStatus = 'pending' | 'approved' | 'offline';
+import { Button, Card, Dialog, Empty, InfiniteScroll, NavBar, Skeleton, Space, Tag, Toast } from 'antd-mobile';
+import AppTabBar from '@/components/AppTabBar';
+import { approveAdminPost, fetchAdminPosts, fetchAdminStatistics, rejectAdminPost } from '@/api';
+import type { AdminStatistics, PostStatus, PostType, RawPost } from '@/api';
+import { formatRelativeTime, statusMeta } from '@/utils/display';
 
 type ReviewPost = {
   id: string;
   title: string;
   desc: string;
   category: string;
-  type: 'lost' | 'found';
+  type: PostType;
   location: string;
   reporter: string;
   time: string;
-  status: ReviewStatus;
+  status: PostStatus;
 };
 
 type AdminPageResult = {
@@ -33,138 +22,68 @@ type AdminPageResult = {
   hasMore: boolean;
 };
 
-const DEMO_MODE = true;
-const PAGE_SIZE = 3;
+const PAGE_SIZE = 5;
+const chartColors = ['#1677ff', '#22c55e', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4'];
 
-const allReviewPosts: ReviewPost[] = [
-  {
-    id: 'a101',
-    title: '蓝色保温杯遗失',
-    desc: '发布人补充了联系方式，内容完整，图片清晰。',
-    category: '生活用品',
-    type: 'lost',
-    location: '图书馆三楼',
-    reporter: '李同学',
-    time: '10 分钟前',
-    status: 'pending',
-  },
-  {
-    id: 'a102',
-    title: '拾到校园卡一张',
-    desc: '包含学生姓名部分信息，建议审核后展示脱敏内容。',
-    category: '证件卡片',
-    type: 'found',
-    location: '一食堂',
-    reporter: '王同学',
-    time: '28 分钟前',
-    status: 'pending',
-  },
-  {
-    id: 'a103',
-    title: '黑色无线耳机盒',
-    desc: '疑似重复发布，需管理员核对是否保留。',
-    category: '数码设备',
-    type: 'lost',
-    location: '东操场',
-    reporter: '陈同学',
-    time: '1 小时前',
-    status: 'pending',
-  },
-  {
-    id: 'a104',
-    title: '透明雨伞招领',
-    desc: '文字描述规范，领取地点明确。',
-    category: '雨具',
-    type: 'found',
-    location: '教学楼 A 座',
-    reporter: '赵同学',
-    time: '2 小时前',
-    status: 'pending',
-  },
-  {
-    id: 'a105',
-    title: '帆布袋寻找',
-    desc: '图片较模糊，但描述信息充分。',
-    category: '书包资料',
-    type: 'lost',
-    location: '自习室 B204',
-    reporter: '周同学',
-    time: '今天 09:20',
-    status: 'pending',
-  },
-  {
-    id: 'a106',
-    title: '拾到钥匙串',
-    desc: '涉及门禁钥匙，建议下架并联系保卫处。',
-    category: '钥匙',
-    type: 'found',
-    location: '二号门',
-    reporter: '刘同学',
-    time: '昨天 18:42',
-    status: 'pending',
-  },
-];
-
-const overviewItems = [
-  { label: '待审核', value: 18, tone: '#1677ff' },
-  { label: '今日新增', value: 32, tone: '#22c55e' },
-  { label: '已下架', value: 5, tone: '#ef4444' },
-] as const;
-
-const categoryData = [
-  { label: '证件卡片', value: 34, color: '#1677ff' },
-  { label: '数码设备', value: 24, color: '#22c55e' },
-  { label: '生活用品', value: 18, color: '#f59e0b' },
-  { label: '其他', value: 24, color: '#8b5cf6' },
-];
-
-const monthlyData = [22, 28, 26, 34, 39, 48, 45, 56, 62, 58, 66, 74];
-const monthLabels = ['1月', '3月', '5月', '7月', '9月', '11月'];
-
-const wait = (duration = 520) =>
-  new Promise((resolve) => {
-    window.setTimeout(resolve, duration);
-  });
-
-const fetchReviewPosts = async (page: number): Promise<AdminPageResult> => {
-  if (DEMO_MODE) {
-    await wait();
-    const start = (page - 1) * PAGE_SIZE;
-    const list = allReviewPosts.slice(start, start + PAGE_SIZE);
-
-    return {
-      list,
-      hasMore: start + PAGE_SIZE < allReviewPosts.length,
-    };
-  }
-
-  return (await request.get('/admin/posts/pending', {
-    params: {
-      page,
-      pageSize: PAGE_SIZE,
-    },
-  })) as unknown as AdminPageResult;
+const defaultStats: AdminStatistics = {
+  total_posts: 0,
+  pending_posts: 0,
+  open_posts: 0,
+  offline_posts: 0,
+  today_posts: 0,
+  total_users: 0,
+  matched_posts: 0,
+  category_stats: [],
+  post_type_stats: [],
+  status_stats: [],
+  monthly_stats: [],
 };
 
-const updateReviewStatus = async (id: string, status: ReviewStatus) => {
-  if (DEMO_MODE) {
-    await wait(360);
+const mapReviewPost = (post: RawPost): ReviewPost => ({
+  id: String(post.id),
+  title: post.goods_name,
+  desc: post.description,
+  category: post.category,
+  type: post.post_type,
+  location: post.location,
+  reporter: post.author?.username || `用户 ${post.user_id}`,
+  time: formatRelativeTime(post.create_time),
+  status: post.status,
+});
+
+const fetchReviewPosts = async (page: number): Promise<AdminPageResult> => {
+  const result = await fetchAdminPosts({
+    page,
+    pageSize: PAGE_SIZE,
+    status: 'pending',
+  });
+
+  return {
+    list: result.items.map(mapReviewPost),
+    hasMore: page * PAGE_SIZE < result.total,
+  };
+};
+
+const updateReviewStatus = async (id: string, status: PostStatus) => {
+  if (status === 'open') {
+    await approveAdminPost(id);
     return;
   }
 
-  await request.patch(`/admin/posts/${id}/status`, { status });
+  await rejectAdminPost(id, '管理员审核下架');
 };
 
-const buildLinePoints = () => {
+const buildLinePoints = (values: number[]) => {
   const width = 300;
   const height = 140;
   const padding = 18;
-  const max = Math.max(...monthlyData);
-  const min = Math.min(...monthlyData);
+  const data = values.length > 0 ? values : [0];
+  const max = Math.max(...data, 1);
+  const min = Math.min(...data);
 
-  return monthlyData
+  return data
     .map((value, index) => {
-      const x = padding + (index / (monthlyData.length - 1)) * (width - padding * 2);
+      const x = padding + (index / Math.max(data.length - 1, 1)) * (width - padding * 2);
       const ratio = (value - min) / (max - min || 1);
       const y = height - padding - ratio * (height - padding * 2);
       return `${x},${y}`;
@@ -226,7 +145,7 @@ const adminStyles = `
 .admin-content {
   max-width: 640px;
   margin: 0 auto;
-  padding: 14px 14px calc(28px + env(safe-area-inset-bottom));
+  padding: 14px 14px calc(92px + env(safe-area-inset-bottom));
 }
 
 .admin-section {
@@ -271,7 +190,6 @@ const adminStyles = `
   display: grid;
   place-items: center;
   border-radius: 999px;
-  background: conic-gradient(#1677ff 0 34%, #22c55e 34% 58%, #f59e0b 58% 76%, #8b5cf6 76% 100%);
   box-shadow: inset 0 0 0 12px rgba(255, 255, 255, 0.7), 0 12px 22px rgba(16, 24, 40, 0.08);
 }
 
@@ -365,10 +283,14 @@ const adminStyles = `
 }
 
 .admin-post-desc {
+  display: -webkit-box;
   margin: 7px 0 10px;
+  overflow: hidden;
   color: #667085;
   font-size: 12px;
   line-height: 1.55;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .admin-post-meta {
@@ -412,12 +334,6 @@ const adminStyles = `
 }
 `;
 
-const statusMeta: Record<ReviewStatus, { text: string; color: string }> = {
-  pending: { text: '待审核', color: '#1677ff' },
-  approved: { text: '已通过', color: '#22c55e' },
-  offline: { text: '已下架', color: '#ef4444' },
-};
-
 const renderSkeleton = () => (
   <div className="admin-list">
     {Array.from({ length: 3 }).map((_, index) => (
@@ -430,15 +346,63 @@ const renderSkeleton = () => (
 );
 
 export default function Admin() {
-  const navigate = useNavigate();
   const [list, setList] = useState<ReviewPost[]>([]);
+  const [stats, setStats] = useState<AdminStatistics>(defaultStats);
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(true);
   const [actionLoadingId, setActionLoadingId] = useState('');
   const actionLockedRef = useRef(false);
 
-  const trendPoints = useMemo(() => buildLinePoints(), []);
+  const categoryTotal = useMemo(
+    () => stats.category_stats.reduce((sum, item) => sum + item.count, 0),
+    [stats.category_stats],
+  );
+  const categoryLegend = useMemo(
+    () =>
+      stats.category_stats.slice(0, 6).map((item, index) => ({
+        ...item,
+        color: chartColors[index % chartColors.length],
+        percent: categoryTotal ? Math.round((item.count / categoryTotal) * 100) : 0,
+      })),
+    [categoryTotal, stats.category_stats],
+  );
+  const pieGradient = useMemo(() => {
+    if (categoryLegend.length === 0 || categoryTotal === 0) {
+      return '#eef4ff';
+    }
+
+    let cursor = 0;
+    const segments = categoryLegend.map((item) => {
+      const start = cursor;
+      cursor += (item.count / categoryTotal) * 100;
+      return `${item.color} ${start}% ${cursor}%`;
+    });
+
+    return `conic-gradient(${segments.join(', ')})`;
+  }, [categoryLegend, categoryTotal]);
+  const monthlyValues = useMemo(() => stats.monthly_stats.map((item) => item.count), [stats.monthly_stats]);
+  const trendPoints = useMemo(() => buildLinePoints(monthlyValues), [monthlyValues]);
+  const monthLabels = useMemo(
+    () => stats.monthly_stats.filter((_, index) => index % 2 === 0).map((item) => item.label),
+    [stats.monthly_stats],
+  );
+  const overviewItems = useMemo(
+    () => [
+      { label: '待审核', value: stats.pending_posts },
+      { label: '今日新增', value: stats.today_posts },
+      { label: '已下架', value: stats.offline_posts },
+    ],
+    [stats],
+  );
+
+  const loadStats = useCallback(async () => {
+    try {
+      setStats(await fetchAdminStatistics());
+    } catch {
+      setStats(defaultStats);
+    }
+  }, []);
 
   const loadPosts = useCallback(async (targetPage: number, append: boolean) => {
     if (!append) {
@@ -464,19 +428,18 @@ export default function Admin() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
+      void loadStats();
       void loadPosts(1, false);
     }, 0);
 
     return () => {
       window.clearTimeout(timer);
     };
-  }, [loadPosts]);
+  }, [loadPosts, loadStats]);
 
-  const handleReview = async (post: ReviewPost, status: ReviewStatus) => {
+  const handleReview = async (post: ReviewPost, status: PostStatus) => {
     if (actionLockedRef.current) {
-      Toast.show({
-        content: '操作太快了，请稍后再试',
-      });
+      Toast.show({ content: '操作太快了，请稍后再试' });
       return;
     }
 
@@ -501,16 +464,14 @@ export default function Admin() {
 
     try {
       await updateReviewStatus(post.id, status);
-      setList((current) => current.map((item) => (item.id === post.id ? { ...item, status } : item)));
+      setList((current) => current.filter((item) => item.id !== post.id));
+      void loadStats();
       Toast.show({
         icon: 'success',
-        content: status === 'approved' ? '审核已通过' : '帖子已下架',
+        content: status === 'open' ? '审核已通过' : '帖子已下架',
       });
     } catch (error) {
-      Toast.show({
-        icon: 'fail',
-        content: error instanceof Error ? error.message : '操作失败，请稍后重试',
-      });
+      Toast.show({ icon: 'fail', content: error instanceof Error ? error.message : '操作失败，请稍后重试' });
     } finally {
       setActionLoadingId('');
     }
@@ -520,7 +481,7 @@ export default function Admin() {
     <main className="admin-page">
       <style>{adminStyles}</style>
       <header className="admin-header">
-        <NavBar className="admin-nav" onBack={() => navigate(-1)}>
+        <NavBar className="admin-nav" backArrow={false}>
           管理员后台
         </NavBar>
         <div className="admin-overview">
@@ -537,30 +498,34 @@ export default function Admin() {
         <Card className="admin-section">
           <h2 className="admin-section-title">
             物品分类占比
-            <span>近 30 天</span>
+            <span>{categoryTotal} 条记录</span>
           </h2>
-          <div className="admin-chart-grid">
-            <div className="admin-pie">
-              <div className="admin-pie-inner">100%</div>
+          {categoryLegend.length === 0 ? (
+            <Empty description="暂无分类数据" />
+          ) : (
+            <div className="admin-chart-grid">
+              <div className="admin-pie" style={{ background: pieGradient }}>
+                <div className="admin-pie-inner">100%</div>
+              </div>
+              <div className="admin-legend">
+                {categoryLegend.map((item) => (
+                  <div className="admin-legend-item" key={item.category}>
+                    <span className="admin-legend-left">
+                      <span className="admin-legend-dot" style={{ background: item.color }} />
+                      {item.category}
+                    </span>
+                    <strong>{item.percent}%</strong>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="admin-legend">
-              {categoryData.map((item) => (
-                <div className="admin-legend-item" key={item.label}>
-                  <span className="admin-legend-left">
-                    <span className="admin-legend-dot" style={{ background: item.color }} />
-                    {item.label}
-                  </span>
-                  <strong>{item.value}%</strong>
-                </div>
-              ))}
-            </div>
-          </div>
+          )}
         </Card>
 
         <Card className="admin-section">
           <h2 className="admin-section-title">
             月度发帖趋势
-            <span>全年统计</span>
+            <span>近 12 个月</span>
           </h2>
           <div className="admin-line-wrap">
             <svg className="admin-line-chart" viewBox="0 0 300 140" role="img" aria-label="月度发帖趋势折线图">
@@ -588,7 +553,7 @@ export default function Admin() {
         <Card className="admin-section">
           <h2 className="admin-section-title">
             待审核帖子
-            <span>{list.filter((item) => item.status === 'pending').length} 条待处理</span>
+            <span>{stats.pending_posts} 条待处理</span>
           </h2>
 
           {loading ? (
@@ -597,45 +562,47 @@ export default function Admin() {
             <Empty description="暂无待审核帖子" />
           ) : (
             <div className="admin-list">
-              {list.map((post) => (
-                <Card className="admin-post-card" key={post.id}>
-                  <div className="admin-post-head">
-                    <h3 className="admin-post-title">{post.title}</h3>
-                    <Tag className="admin-status-tag" fill="solid" color={statusMeta[post.status].color}>
-                      {statusMeta[post.status].text}
-                    </Tag>
-                  </div>
-                  <p className="admin-post-desc">{post.desc}</p>
-                  <div className="admin-post-meta">
-                    <span>{post.category}</span>
-                    <span>{post.type === 'lost' ? '寻物' : '招领'}</span>
-                    <span>{post.location}</span>
-                    <span>{post.reporter}</span>
-                    <span>{post.time}</span>
-                  </div>
-                  <div className="admin-actions">
-                    <Button
-                      className="admin-action"
-                      color="success"
-                      fill="outline"
-                      disabled={post.status === 'approved'}
-                      loading={actionLoadingId === `${post.id}-approved`}
-                      onClick={() => handleReview(post, 'approved')}
-                    >
-                      审核通过
-                    </Button>
-                    <Button
-                      className="admin-action admin-risk"
-                      fill="outline"
-                      disabled={post.status === 'offline'}
-                      loading={actionLoadingId === `${post.id}-offline`}
-                      onClick={() => handleReview(post, 'offline')}
-                    >
-                      下架
-                    </Button>
-                  </div>
-                </Card>
-              ))}
+              {list.map((post) => {
+                const meta = statusMeta(post.status);
+
+                return (
+                  <Card className="admin-post-card" key={post.id}>
+                    <div className="admin-post-head">
+                      <h3 className="admin-post-title">{post.title}</h3>
+                      <Tag className="admin-status-tag" fill="solid" color={meta.color}>
+                        {meta.text}
+                      </Tag>
+                    </div>
+                    <p className="admin-post-desc">{post.desc}</p>
+                    <div className="admin-post-meta">
+                      <span>{post.category}</span>
+                      <span>{post.type === 'lost' ? '寻物' : '招领'}</span>
+                      <span>{post.location}</span>
+                      <span>{post.reporter}</span>
+                      <span>{post.time}</span>
+                    </div>
+                    <div className="admin-actions">
+                      <Button
+                        className="admin-action"
+                        color="success"
+                        fill="outline"
+                        loading={actionLoadingId === `${post.id}-open`}
+                        onClick={() => handleReview(post, 'open')}
+                      >
+                        审核通过
+                      </Button>
+                      <Button
+                        className="admin-action admin-risk"
+                        fill="outline"
+                        loading={actionLoadingId === `${post.id}-offline`}
+                        onClick={() => handleReview(post, 'offline')}
+                      >
+                        下架
+                      </Button>
+                    </div>
+                  </Card>
+                );
+              })}
 
               <InfiniteScroll loadMore={() => loadPosts(page + 1, true)} hasMore={hasMore}>
                 {(more, failed, retry) => {
@@ -658,6 +625,7 @@ export default function Admin() {
           )}
         </Card>
       </section>
+      <AppTabBar activeKey="admin" />
     </main>
   );
 }
